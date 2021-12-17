@@ -4,11 +4,12 @@ import argparse
 import json
 import numpy
 import http.server
+import http.client
 from http import HTTPStatus
 import urllib.parse
-import pyarrow.parquet
 
 import pydike.core.webhdfs
+import pydike.core.parquet
 import pydike.client.tpch
 
 
@@ -26,7 +27,6 @@ class ChunkedWriter:
 
 
 logging_lock = threading.Lock()
-
 
 class NdpRequestHandler(http.server.BaseHTTPRequestHandler):
     def log_message(self, format, *args):
@@ -56,7 +56,6 @@ class NdpRequestHandler(http.server.BaseHTTPRequestHandler):
                 op = q.split('op=')[1]
                 setattr(self, 'op', op)
 
-
     def do_POST(self):
         self.log(f'POST {self.path}')
         self.parse_url()
@@ -81,7 +80,7 @@ class NdpRequestHandler(http.server.BaseHTTPRequestHandler):
 
 
     def do_GET(self):
-        print('GET', self.path)
+        self.log(f'GET {self.path}')
         self.parse_url()
 
         if self.op == 'GETNDPINFO':
@@ -109,15 +108,15 @@ class NdpRequestHandler(http.server.BaseHTTPRequestHandler):
 
         self.wfile.flush()
 
-
     def get_ndp_info(self):
         netloc = self.server.config.webhdfs
         f = pydike.core.webhdfs.WebHdfsFile(f'webhdfs://{netloc}/{self.path}', user=self.user)
-        pf = pyarrow.parquet.ParquetFile(f)
+        pf = pydike.core.parquet.ParquetReader(f)
         info = dict()
-        info['columns'] = pf.schema_arrow.names
-        info['dtypes'] = [numpy.dtype(c.to_pandas_dtype()).name for c in pf.schema_arrow.types]
-        info['num_row_groups'] = pf.num_row_groups
+        info['columns'] = pf.columns
+        #  info['dtypes'] = [numpy.dtype(c.to_pandas_dtype()).name for c in pf.schema_arrow.types]
+        info['dtypes'] = [t.name for t in pf.dtypes.values()]
+        info['num_row_groups'] = len(pf.row_groups)
 
         info_json = json.dumps(info)
         self.send_response(HTTPStatus.OK)

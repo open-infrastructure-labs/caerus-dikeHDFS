@@ -5,50 +5,41 @@ import json
 
 
 class WebHdfsFile(object):
-    def __init__(self, name, user=None, buffer_size=(128 << 10), size=None, data_url=None, data_req=None):
+    def __init__(self, name, user=None, buffer_size=(128 << 10)):
         self.name = name
         self.user = user
         self.buffer_size = buffer_size
-        self.mode = 'rb'
         self.closed = False
         self.offset = 0
         self.read_stats = []
         self.read_bytes = 0
         self.verbose = False
+        self.prefetch_buffer = None
+        self.prefetch_offset = -1
 
-        if size is None:  # Support for copy constructor
-            self.url = urllib.parse.urlparse(self.name)
-            if self.user is None:
-                for q in self.url.query.split('&'):
-                    if 'user.name=' in q:
-                        self.user = q.split('user.name=')[1]
 
-            self.conn = http.client.HTTPConnection(self.url.netloc)
-            req = f'/webhdfs/v1/{self.url.path}?op=GETFILESTATUS&user.name={self.user}'
-            self.conn.request("GET", req)
-            resp = self.conn.getresponse()
-            resp_data = resp.read()
-            file_status = json.loads(resp_data)['FileStatus']
-            self.size = file_status['length']
-        else:
-            self.size = size
+        self.url = urllib.parse.urlparse(self.name)
+        if self.user is None:
+            for q in self.url.query.split('&'):
+                if 'user.name=' in q:
+                    self.user = q.split('user.name=')[1]
 
-        if data_req is None or data_url is None:  # Support for copy constructor
-            req = f'/webhdfs/v1{self.url.path}?op=OPEN&user.name={self.user}&buffersize={self.buffer_size}'
-            self.conn.request("GET", req)
-            resp = self.conn.getresponse()
-            self.data_url = urllib.parse.urlparse(resp.headers['Location'])
-            self.conn.close()
+        self.conn = http.client.HTTPConnection(self.url.netloc)
+        req = f'/webhdfs/v1/{self.url.path}?op=GETFILESTATUS&user.name={self.user}'
+        self.conn.request("GET", req)
+        resp = self.conn.getresponse()
+        resp_data = resp.read()
+        file_status = json.loads(resp_data)['FileStatus']
+        self.size = file_status['length']
 
-            query = self.data_url.query.split('&offset=')[0]
-            self.data_req = f'{self.data_url.path}?{query}'
-        else:
-            self.data_req = data_req
-            self.data_url = data_url
+        req = f'/webhdfs/v1{self.url.path}?op=OPEN&user.name={self.user}&buffersize={self.buffer_size}'
+        self.conn.request("GET", req)
+        resp = self.conn.getresponse()
+        self.data_url = urllib.parse.urlparse(resp.headers['Location'])
+        self.conn.close()
 
-    def copy(self):  # Copy constructor
-        f = WebHdfsFile(self.name, self.user, self.buffer_size, self.size, self.data_url, self.data_req)
-        return f
+        query = self.data_url.query.split('&offset=')[0]
+        self.data_req = f'{self.data_url.path}?{query}'
 
     def seek(self, offset, whence=0):
         #print("Attempt to seek {} from {}".format(offset, whence))
@@ -61,6 +52,17 @@ class WebHdfsFile(object):
 
         return self.offset
 
+    def prefetch(self, offset, length):
+        self.prefetch_buffer = bytearray(length)
+        self.read_stats.append((offset, length))
+        req = f'{self.data_req}&offset={offset}&length={length}'
+        conn = http.client.HTTPConnection(self.data_url.netloc, blocksize=self.buffer_size)
+        conn.request("GET", req)
+        resp = conn.getresponse()
+        resp.readinto(self.prefetch_buffer)
+        conn.close()
+        self.prefetch_offset = offset
+
     def read(self, length=-1):
         if self.verbose:
             print(f"Attempt to read from {self.offset} len {length}")
@@ -70,6 +72,12 @@ class WebHdfsFile(object):
 
         self.offset += length
         self.read_bytes += length
+        if self.prefetch_offset >= 0:
+            if pos >= self.prefetch_offset and (pos + length <= self.prefetch_offset + len(self.prefetch_buffer)):
+                begin = pos - self.prefetch_offset
+                end = begin + length
+                return self.prefetch_buffer[begin:end]
+
         self.read_stats.append((pos, length))
         req = f'{self.data_req}&offset={pos}&length={length}'
         conn = http.client.HTTPConnection(self.data_url.netloc, blocksize=self.buffer_size)

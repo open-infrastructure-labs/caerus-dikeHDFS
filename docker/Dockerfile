@@ -58,7 +58,7 @@ RUN apt-get -q update \
     && apt-get -q install -y --no-install-recommends \
         python3-pip python3-venv python3-wheel
 
-RUN pip3 install pandas sqlparse duckdb pyarrow
+RUN pip3 install pandas sqlparse duckdb fastparquet
 
 # SSH support
 RUN apt-get -q update \
