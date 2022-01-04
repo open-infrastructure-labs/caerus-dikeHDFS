@@ -67,6 +67,7 @@ RUN apt-get -q update \
         ssh \
         openssh-server 
 
+RUN pip3 install pyarrow
 
 RUN apt-get clean && rm -rf /var/lib/apt/lists/*
 

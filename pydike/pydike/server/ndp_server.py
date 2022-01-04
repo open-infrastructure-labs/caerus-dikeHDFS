@@ -1,5 +1,7 @@
 #!/usr/bin/python3 -u
 import threading
+import time
+import gc
 import argparse
 import json
 import numpy
@@ -11,6 +13,7 @@ import urllib.parse
 import pydike.core.webhdfs
 import pydike.core.parquet
 import pydike.client.tpch
+import pydike.core.util as util
 
 
 class ChunkedWriter:
@@ -27,6 +30,9 @@ class ChunkedWriter:
 
 
 logging_lock = threading.Lock()
+
+def tpch_run(config):
+    return pydike.client.tpch.TpchSQL(config)
 
 class NdpRequestHandler(http.server.BaseHTTPRequestHandler):
     def log_message(self, format, *args):
@@ -70,13 +76,16 @@ class NdpRequestHandler(http.server.BaseHTTPRequestHandler):
         self.log(f'config.url {config["url"]}')
 
         config['verbose'] = self.server.config.verbose
+
         tpch_sql = pydike.client.tpch.TpchSQL(config)
+
         self.send_response(HTTPStatus.OK)
         self.send_header('Transfer-Encoding', 'chunked')
         self.end_headers()
         writer = ChunkedWriter(self.wfile)
         tpch_sql.to_spark(writer)
         writer.close()
+        del tpch_sql
 
 
     def do_GET(self):
@@ -110,13 +119,12 @@ class NdpRequestHandler(http.server.BaseHTTPRequestHandler):
 
     def get_ndp_info(self):
         netloc = self.server.config.webhdfs
-        f = pydike.core.webhdfs.WebHdfsFile(f'webhdfs://{netloc}/{self.path}', user=self.user)
-        pf = pydike.core.parquet.ParquetReader(f)
+        reader = pydike.core.parquet.get_reader(f'webhdfs://{netloc}/{self.path}', user=self.user)
         info = dict()
-        info['columns'] = pf.columns
+        info['columns'] = reader.columns
         #  info['dtypes'] = [numpy.dtype(c.to_pandas_dtype()).name for c in pf.schema_arrow.types]
-        info['dtypes'] = [t.name for t in pf.dtypes.values()]
-        info['num_row_groups'] = len(pf.row_groups)
+        info['dtypes'] = [t.name for t in reader.dtypes]
+        info['num_row_groups'] = len(reader.row_groups)
 
         info_json = json.dumps(info)
         self.send_response(HTTPStatus.OK)

@@ -2,3 +2,4 @@ numpy
 duckdb
 sqlparse
 fastparquet
+pyarrow

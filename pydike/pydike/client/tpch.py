@@ -11,10 +11,11 @@ import urllib.parse
 import numpy
 import duckdb
 import sqlparse
+import pyarrow
 
 from pydike.core.webhdfs import WebHdfsFile
-from pydike.core.parquet import ParquetReader
-
+import pydike.core.parquet as parquet
+import pydike.core.util as util
 
 class DataTypes:
     BOOLEAN = 0
@@ -30,7 +31,6 @@ class DataTypes:
 
 
 logging_lock = threading.Lock()
-duckdb_lock = threading.Lock()
 
 class TpchSQL:
     def __init__(self, config):
@@ -59,21 +59,27 @@ class TpchSQL:
         conn.close()
 
     def local_run(self):
-        f = WebHdfsFile(self.config['url'])
-        reader = ParquetReader(f)
+        reader = parquet.get_reader(self.config['url'])
         tokens = sqlparse.parse(self.config['query'])[0].flatten()
         sql_columns = set([t.value for t in tokens if t.ttype in [sqlparse.tokens.Token.Name]])
-        # columns = [col for col in pf.schema_arrow.names if col in sql_columns]
+
         columns = [col for col in reader.columns if col in sql_columns]
         self.log_message(columns)
         rg = int(self.config['row_group'])
         df = reader.read_rg(rg, columns)
+        con = duckdb.connect(database=':memory:')
 
-        # duckdb_lock.acquire()
-        self.df = duckdb.query_df(df, 'arrow', self.config['query']).fetchdf()
+        if isinstance(df, pyarrow.lib.Table):
+            con.register_arrow('arrow', df)
+        else:
+            con.register('arrow', df)
+
+        con.execute(self.config['query'])
+        self.df = con.fetchdf()
+        con.unregister('arrow')
+        con.close()
+
         del df
-        # duckdb_lock.release()
-
         self.log_message(f'Computed df {self.df.shape}')
 
     def to_spark(self, outfile):
@@ -121,9 +127,9 @@ def run_test(row_group, args):
 
     user = getpass.getuser()
     config = dict()
-    config['use_ndp'] = 'True'
+    config['use_ndp'] = str(args.use_ndp == 1)
     config['row_group'] = str(row_group)
-    config['query'] = "SELECT l_partkey, l_extendedprice, l_discount FROM arrow WHERE l_shipdate >= '1995-09-01' AND l_shipdate < '1995-10-01'"
+    config['query'] = "SELECT l_partkey, l_extendedprice, l_discount FROM arrow WHERE l_shipdate >= '1995-09-01' AND l_shipdate < '1995-10-01';"
     config['url'] = f'http://{args.server}/{fname}?op=SELECTCONTENT&user.name={user}'
     config['verbose'] = args.verbose
 
@@ -135,6 +141,7 @@ if __name__ == '__main__':
     parser.add_argument('-s', '--server', default='dikehdfs:9860', help='NDP server http-address')
     parser.add_argument('-v', '--verbose', type=int, default='0', help='Verbose mode')
     parser.add_argument('-r', '--rg_count', type=int, default='1', help='Number of row groups to read')
+    parser.add_argument('-n', '--use_ndp', type=int, default=1, help='Use NDP parameter')
     args = parser.parse_args()
 
     rg_count = args.rg_count
@@ -147,4 +154,7 @@ if __name__ == '__main__':
     res = [f.result() for f in futures]
     end = time.time()
     print(f"Query time is: {end - start:.3f} secs")
+    print(f'MemUsage {util.get_memory_usage_mb()}')
 
+# This can be used for memory consumption test
+# for i in $(seq 0 300) ; do python3 /opt/volume/python3/packages/pydike/client/tpch.py -s dikehdfs:9860 -r 8 -v 1 -n 1 ; done
