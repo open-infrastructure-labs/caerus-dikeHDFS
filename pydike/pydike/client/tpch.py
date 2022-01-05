@@ -119,32 +119,50 @@ class TpchSQL:
         outfile.write(data)
 
 def run_test(row_group, args):
-    fname = '/tpch-test-parquet-1g/lineitem.parquet/' \
-            'part-00000-badcef81-d816-44c1-b936-db91dae4c15f-c000.snappy.parquet'
+    # fname = '/tpch-test-parquet-1g/lineitem.parquet/part-00000-badcef81-d816-44c1-b936-db91dae4c15f-c000.snappy.parquet'
 
     # TPC-H 100 GB
-    fname = '/tpch-test-parquet/lineitem.parquet'
+    # fname = '/tpch-test-parquet/lineitem.parquet'
 
     user = getpass.getuser()
     config = dict()
     config['use_ndp'] = str(args.use_ndp == 1)
     config['row_group'] = str(row_group)
     config['query'] = "SELECT l_partkey, l_extendedprice, l_discount FROM arrow WHERE l_shipdate >= '1995-09-01' AND l_shipdate < '1995-10-01';"
-    config['url'] = f'http://{args.server}/{fname}?op=SELECTCONTENT&user.name={user}'
+    config['url'] = f'http://{args.server}/{args.file}?op=SELECTCONTENT&user.name={user}'
     config['verbose'] = args.verbose
 
     return TpchSQL(config)
 
 
+def get_ndp_info(args):
+    user = getpass.getuser()
+    conn = http.client.HTTPConnection(args.server)
+    req = f'{args.file}?op=GETNDPINFO&user.name={user}'
+    conn.request("GET", req)
+    resp = conn.getresponse()
+    resp_data = resp.read()
+    ndp_info = json.loads(resp_data)
+    conn.close()
+    return ndp_info
+
 if __name__ == '__main__':
+    fname = '/tpch-test-parquet/lineitem.parquet'
     parser = argparse.ArgumentParser(description='Run NDP server.')
     parser.add_argument('-s', '--server', default='dikehdfs:9860', help='NDP server http-address')
     parser.add_argument('-v', '--verbose', type=int, default='0', help='Verbose mode')
     parser.add_argument('-r', '--rg_count', type=int, default='1', help='Number of row groups to read')
     parser.add_argument('-n', '--use_ndp', type=int, default=1, help='Use NDP parameter')
+    parser.add_argument('-f', '--file', default=fname, help='HDFS file')
     args = parser.parse_args()
 
     rg_count = args.rg_count
+
+    if args.use_ndp == 1:
+        ndp_info = get_ndp_info(args)
+        for key, value in ndp_info.items():
+            print(f'{key} : {value}')
+
     start = time.time()
     executor = ThreadPoolExecutor(max_workers=rg_count)
     futures = list()

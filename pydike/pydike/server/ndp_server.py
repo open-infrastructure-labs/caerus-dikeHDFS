@@ -119,12 +119,11 @@ class NdpRequestHandler(http.server.BaseHTTPRequestHandler):
 
     def get_ndp_info(self):
         netloc = self.server.config.webhdfs
-        reader = pydike.core.parquet.get_reader(f'webhdfs://{netloc}/{self.path}', user=self.user)
+        reader = pydike.core.parquet.get_reader(f'webhdfs://{netloc}/{self.path}')
         info = dict()
         info['columns'] = reader.columns
-        #  info['dtypes'] = [numpy.dtype(c.to_pandas_dtype()).name for c in pf.schema_arrow.types]
         info['dtypes'] = [t.name for t in reader.dtypes]
-        info['num_row_groups'] = len(reader.row_groups)
+        info['num_row_groups'] = reader.num_row_groups
 
         info_json = json.dumps(info)
         self.send_response(HTTPStatus.OK)
